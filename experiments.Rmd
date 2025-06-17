@@ -1,0 +1,224 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: Brian k. Masinde
+---
+
+```{r}
+# packages
+library(sp)
+library(rgdal)
+library(classInt)
+library(spdep)
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(spatialreg)
+```
+
+```{r}
+# Loading data _________________________________________________________________
+path2Data <- "~/PhD Track/courses i take/spatial statistics/data/elect80_sj.shp"
+voter_turn <- readOGR(path2Data)
+```
+
+```{r}
+# Data exploration _____________________________________________________________
+## Adding regions to the data
+nrtheast <- c(
+  "Connecticut",
+  "Maine",
+  "Massachusetts",
+  "New Hampshire",
+  "Rhode Island",
+  "Vermont",
+  "New Jersey",
+  "New York",
+  "Pennsylvania"
+)
+mdwest <- c(
+  "Illinois",
+  "Indiana",
+  "Michigan",
+  "Ohio",
+  "Wisconsin",
+  "Iowa",
+  "Kansas",
+  "Minnesota",
+  "Missouri",
+  "Nebraska",
+  "North Dakota",
+  "South Dakota"
+)
+sth <- c(
+  "Delaware",
+  "Florida",
+  "Georgia",
+  "Maryland",
+  "North Carolina",
+  "South Carolina",
+  "Virginia",
+  "Washington DC",
+  "West Virginia",
+  "Oklahoma",
+  "Texas",
+  "Tennessee",
+  "Kentucky",
+  "Alabama",
+  "Mississippi",
+  "Louisiana",
+  "Arkansas"
+)
+wst <- c(
+  "Arizona",
+  "Colorado",
+  "Idaho",
+  "Montana",
+  "Nevada",
+  "New Mexico",
+  "Utah",
+  "Wyoming",
+  "Alaska",
+  "California",
+  "Hawai",
+  "Oregon",
+  "Washington"
+)
+regions_lst <- list(
+  "nrtheast" = nrtheast,
+  "mdwest" = mdwest,
+  "sth" = sth,
+  "wst" = wst
+)
+```
+
+```{r}
+# create new columns in the data fill with NA
+voter_turn@data$region <- rep(NA, nrow(voter_turn@data))
+
+# loop throw each row check whether obsevaration is in the region
+for (i in 1:nrow(voter_turn@data)) {
+  if (voter_turn@data$STATENAM[i] %in% regions_lst$nrtheast == TRUE) {
+    voter_turn@data$region[i] <- 1
+  } else if (voter_turn@data$STATENAM[i] %in% regions_lst$mdwest == TRUE) {
+    voter_turn@data$region[i] <- 2
+  } else if (voter_turn@data$STATENAM[i] %in% regions_lst$sth == TRUE) {
+    voter_turn@data$region[i] <- 3
+  } else if (voter_turn@data$STATENAM[i] %in% regions_lst$wst == TRUE) {
+    voter_turn@data$region[i] <- 4
+  }
+}
+
+```
+
+
+```{r}
+# convert it to a long table
+voter_turn@data$nrtheast <- rep(NA, nrow(voter_turn@data))
+voter_turn@data$mdwest <- rep(NA, nrow(voter_turn@data))
+voter_turn@data$sth <- rep(NA, nrow(voter_turn@data))
+voter_turn@data$wst <- rep(NA, nrow(voter_turn@data))
+
+for (i in 1:nrow(voter_turn@data)) {
+  if (voter_turn@data$region[i] == 1) {
+    voter_turn@data$nrtheast[i] <- 1
+    voter_turn@data$mdwest[i] <- 0
+    voter_turn@data$sth[i] <- 0
+    voter_turn@data$wst[i] <- 0
+  } else if (voter_turn@data$region[i] == 2) {
+    voter_turn@data$nrtheast[i] <- 0
+    voter_turn@data$mdwest[i] <- 1
+    voter_turn@data$sth[i] <- 0
+    voter_turn@data$wst[i] <- 0
+  } else if (voter_turn@data$region[i] == 3) {
+    voter_turn@data$nrtheast[i] <- 0
+    voter_turn@data$mdwest[i] <- 0
+    voter_turn@data$sth[i] <- 1
+    voter_turn@data$wst[i] <- 0
+  } else if (voter_turn@data$region[i] == 4) {
+    voter_turn@data$nrtheast[i] <- 0
+    voter_turn@data$mdwest[i] <- 0
+    voter_turn@data$sth[i] <- 0
+    voter_turn@data$wst[i] <- 1
+  }
+}
+```
+
+
+```{r}
+# Linear regression ____________________________________________________________
+lm_elect80 <- lm(formula = pc_turnout ~ pc_college + pc_homeown + pc_income,
+                 data = voter_turn@data)
+summary(lm_elect80)
+# checking plots to see if IID assumptions are met
+lm_elect80_2 <- lm(formula = pc_turnout ~ pc_college + pc_homeown + pc_income,
+                   data = voter_turn2)
+plot(lm_elect80_2)
+```
+
+
+```{r}
+# Spatial Analysis _____________________________________________________________
+## Creating queen weights
+sf_use_s2(FALSE)
+queenNB <- poly2nb(voter_turn, queen = TRUE)
+## plotting neighbor weights
+plot(voter_turn, border = "grey60", axes = TRUE)
+```
+
+
+```{r}
+plot(queenNB, coordinates(voter_turn), add = TRUE)
+```
+
+
+```{r}
+## Moran's I test using queen weights
+elect80MoranQ <- moran.test(
+  voter_turn@data$pc_turnout,
+  listw = nb2listw(queenNB, zero.policy = TRUE),
+  zero.policy = TRUE
+)
+
+elect80MoranQ
+```
+
+
+```{r}
+## Lagrange multiplier test (Queen)
+OLSResMoranQ <- lm.LMtests(
+  lm_elect80,
+  listw = nb2listw(queenNB, zero.policy = TRUE),
+  test = c("LMerr", "LMlag"),
+  zero.policy = TRUE
+)
+OLSResMoranQ
+```
+
+```{r}
+## CAR model 1
+e80_CAR <- spautolm(
+  pc_turnout ~ pc_college + pc_homeown + pc_income,
+  data = voter_turn,
+  listw = nb2listw(queenNB, zero.policy = TRUE),
+  family = "CAR",
+  zero.policy = TRUE
+)
+
+e80_CAR
+```
+
+
+```{r}
+## CAR model 2
+e80_CAR_2 <- spautolm(
+  pc_turnout ~ pc_college + pc_homeown + pc_income + nrtheast +
+    mdwest + sth + wst,
+  data = voter_turn,
+  listw = nb2listw(queenNB, zero.policy = TRUE),
+  family = "CAR",
+  zero.policy = TRUE
+)
+summary(e80_CAR_2)
+```
+
